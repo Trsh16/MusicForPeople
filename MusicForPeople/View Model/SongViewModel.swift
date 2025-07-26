@@ -9,60 +9,82 @@ import AVFoundation
 import Combine
 import SwiftUI
 
-class AudioPlayerManager: ObservableObject {
+
+class SongViewModel: ObservableObject {
     @Published var songs: [Song] = []
     @Published var currentIndex: Int? = nil
     @Published var isPlaying = false
+    @Published var isLoading = false
     @Published var progress: Double = 0.0
-    
+
     private var player: AVAudioPlayer?
     private var timer: Timer?
 
     init() {
-        loadSongsFromJSON()
-    }
-    
-    func loadSongs(_ songs: [Song]) {
-        self.songs = songs
+        loadSongsFromAPI()
     }
 
-    func loadSongsFromJSON() {
-        guard let data = jsonDataString.data(using: .utf8) else { return }
-
-        do {
-            let decoded = try JSONDecoder().decode(TrackListResponse.self, from: data)
-            let songList = decoded.track.map {
-                Song(
-                    name: $0.strTrack,
-                    artist: $0.strArtist,
-                    album: $0.strAlbum,
-                    image: Image("The_Weeknd_-_After_Hours") // assume this asset exists in Assets.xcassets
-                )
+    func loadSongsFromAPI() {
+        if songs.isEmpty{
+            isLoading = true
+        }
+        APIManager.shared.fetchTracks { result in
+            switch result {
+            case .success(let songs):
+                DispatchQueue.main.async {
+                    self.songs = songs
+                    self.isLoading = false
+                }
+            case .failure(let error):
+                print("❌ Error fetching songs: \(error)")
             }
-            self.songs = songList
-        } catch {
-            print("Decoding error: \(error)")
         }
     }
 
     func playSong(at index: Int) {
         guard songs.indices.contains(index) else { return }
 
-        let fileName = "dancing-in-the-rain-214815"
-        let fileExt = "mp3"
+        let song = songs[index]
 
-        let aSound = NSURL(fileURLWithPath: Bundle.main.path(forResource: fileName, ofType: "mp3")!)
-
-        do {
-            player = try AVAudioPlayer(contentsOf:aSound as URL)
-            player?.prepareToPlay()
-            player?.play()
-            isPlaying = true
-            currentIndex = index
-            startProgressTimer()
-        } catch {
-            print("Error loading audio file: \(error)")
+        // Assuming `song.url` contains the full URL to the audio file
+        guard let url = URL(string: song.url) else {
+            print("❌ Invalid song URL: \(song.url)")
+            return
         }
+
+        // AVAudioPlayer only supports local files, so we download it first
+        isLoading = true
+        let task = URLSession.shared.downloadTask(with: url) { [weak self] localURL, response, error in
+            DispatchQueue.main.async {
+                self?.isLoading = false
+            }
+
+            if let error = error {
+                print("❌ Failed to download audio: \(error)")
+                return
+            }
+
+            guard let localURL = localURL else {
+                print("❌ Audio file could not be downloaded.")
+                return
+            }
+
+            do {
+                let audioPlayer = try AVAudioPlayer(contentsOf: localURL)
+                DispatchQueue.main.async {
+                    self?.player = audioPlayer
+                    self?.player?.prepareToPlay()
+                    self?.player?.play()
+                    self?.isPlaying = true
+                    self?.currentIndex = index
+                    self?.startProgressTimer()
+                }
+            } catch {
+                print("❌ AVAudioPlayer failed to play: \(error)")
+            }
+        }
+
+        task.resume()
     }
 
     func playPause() {
@@ -89,17 +111,16 @@ class AudioPlayerManager: ObservableObject {
         playSong(at: prevIndex)
     }
 
-    func startProgressTimer() {
-        timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
-            if let player = self.player {
-                self.progress = player.duration == 0 ? 0 : player.currentTime / player.duration
-            }
-        }
-    }
-
     func seek(to value: Double) {
         guard let player = player else { return }
         player.currentTime = player.duration * value
+    }
+
+    private func startProgressTimer() {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
+            guard let player = self.player else { return }
+            self.progress = player.duration == 0 ? 0 : player.currentTime / player.duration
+        }
     }
 }

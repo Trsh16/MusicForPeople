@@ -13,7 +13,6 @@ struct ContentView: View {
             VStack{
                 SongView()
             }
-            .navigationBarTitle("Music For People")
         }
     }
 }
